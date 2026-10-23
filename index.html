@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Quitar Fondo</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #6b7280;
+    --accent: #4f46e5; --accent-text: #ffffff; --border: #e3e6ec; --check: #e9ebef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #12141a; --card: #1b1e26; --text: #e8eaf0; --muted: #9aa1ae;
+            --accent: #818cf8; --accent-text: #0f1020; --border: #2c303b; --check: #262a33; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { margin: 0 0 4px; font-size: 1.6rem; }
+  p.sub { margin: 0 0 20px; color: var(--muted); }
+  #drop { border: 2px dashed var(--border); border-radius: 14px; background: var(--card);
+          padding: 36px 16px; text-align: center; cursor: pointer; transition: border-color .15s; }
+  #drop.over { border-color: var(--accent); }
+  #drop strong { color: var(--accent); }
+  .bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin: 16px 0; }
+  button, select { font: inherit; border-radius: 8px; border: 1px solid var(--border);
+                   background: var(--card); color: var(--text); padding: 8px 14px; cursor: pointer; }
+  button.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button:disabled { opacity: .5; cursor: default; }
+  #status { color: var(--muted); font-size: .95rem; }
+  #grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); }
+  .item { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .preview { aspect-ratio: 1; display: grid; place-items: center;
+             background: conic-gradient(var(--check) 25%, transparent 0 50%, var(--check) 0 75%, transparent 0) 0 0 / 20px 20px; }
+  .preview img { max-width: 100%; max-height: 100%; object-fit: contain; }
+  .info { padding: 10px 12px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .name { font-size: .85rem; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .working { opacity: .45; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Quitar fondo ✂️</h1>
+  <p class="sub">Todo se procesa en tu navegador: las imágenes no se suben a ningún servidor.</p>
+
+  <label id="drop">
+    <input id="file" type="file" accept="image/*" multiple hidden>
+    Arrastrá imágenes acá o <strong>hacé clic para elegir</strong>
+  </label>
+
+  <div class="bar">
+    <label>Modo:
+      <select id="model">
+        <option value="isnet_quint8">Rápido</option>
+        <option value="isnet_fp16" selected>Equilibrado</option>
+        <option value="isnet">Máxima calidad</option>
+      </select>
+    </label>
+    <button id="all" class="primary" disabled>Descargar todas</button>
+    <span id="status">La primera vez descarga el modelo (unos segundos), después vuela.</span>
+  </div>
+
+  <div id="grid"></div>
+</main>
+
+<script type="module">
+  import { removeBackground } from "https://cdn.jsdelivr.net/npm/@imgly/background-removal@1.7.0/+esm";
+
+  const $ = (id) => document.getElementById(id);
+  const drop = $("drop"), input = $("file"), grid = $("grid"), status = $("status"), allBtn = $("all");
+  const results = [];
+  let queue = Promise.resolve();
+
+  const config = () => ({
+    model: $("model").value,
+    device: navigator.gpu ? "gpu" : "cpu",
+    output: { format: "image/png" },
+    progress: (key, cur, total) => {
+      if (key.startsWith("fetch")) status.textContent = `Descargando modelo… ${Math.round((cur / total) * 100)}%`;
+    },
+  });
+
+  function addFiles(files) {
+    for (const file of files) {
+      if (!file.type.startsWith("image/")) continue;
+      const card = document.createElement("div");
+      card.className = "item";
+      card.innerHTML = `<div class="preview"><img class="working" alt=""></div>
+        <div class="info"><span class="name"></span><button disabled>Procesando…</button></div>`;
+      const img = card.querySelector("img"), btn = card.querySelector("button");
+      card.querySelector(".name").textContent = file.name;
+      img.src = URL.createObjectURL(file);
+      grid.prepend(card);
+      queue = queue.then(() => process(file, img, btn));
+    }
+  }
+
+  async function process(file, img, btn) {
+    const t0 = performance.now();
+    status.textContent = `Procesando ${file.name}…`;
+    try {
+      const blob = await removeBackground(file, config());
+      const url = URL.createObjectURL(blob);
+      const name = file.name.replace(/\.[^.]+$/, "") + "-sin-fondo.png";
+      img.src = url;
+      img.classList.remove("working");
+      btn.textContent = "Descargar";
+      btn.disabled = false;
+      btn.onclick = () => download(url, name);
+      results.push({ url, name });
+      allBtn.disabled = false;
+      status.textContent = `Listo en ${((performance.now() - t0) / 1000).toFixed(1)} s ✅`;
+    } catch (err) {
+      console.error(err);
+      btn.textContent = "Error";
+      status.textContent = `No se pudo procesar ${file.name}: ${err.message}`;
+    }
+  }
+
+  function download(url, name) {
+    const a = document.createElement("a");
+    a.href = url; a.download = name;
+    document.body.append(a); a.click(); a.remove();
+  }
+
+  allBtn.onclick = () => results.forEach((r, i) => setTimeout(() => download(r.url, r.name), i * 250));
+  input.onchange = () => { addFiles(input.files); input.value = ""; };
+  drop.ondragover = (e) => { e.preventDefault(); drop.classList.add("over"); };
+  drop.ondragleave = () => drop.classList.remove("over");
+  drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove("over"); addFiles(e.dataTransfer.files); };
+  document.onpaste = (e) => addFiles([...e.clipboardData.files]);
+</script>
+</body>
+</html>
